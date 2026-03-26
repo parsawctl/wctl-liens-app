@@ -9,7 +9,7 @@ const SUBRO_DATA = [
   { id:"va", company:"VA (Veterans Affairs)", plans:["VA","Veterans Affairs","CHAMPVA"], phone:"(844) 698-2311", fax:"(202) 495-5862", email:"Garrett.Schafer@va.gov", notes:"Form: va.gov/ogc/collections.asp", type:"Government" },
   { id:"jag", company:"JAG Office (Army/Marines)", plans:["JAG","Army","Marines","Military","Tricare"], phone:"(323) 315-7425", altPhone:"Monterey: (831) 242-6386", type:"Government" },
   { id:"rawlings", company:"The Rawlings Company", plans:["Kaiser Southern CA","Kaiser Northern CA","Kaiser","United Healthcare","UHC","Health Net","BCBS CA","Blue Shield CA","Aetna","Silversummit NV","Ambetter NC"], phone:"(502) 587-1279", fax:"(502) 587-5558", altFax:"(502) 753-7064", notes:"Kaiser specialist: Nichole King — pushes toward 1/3 but factors other liens", type:"Third-Party Admin" },
-  { id:"optum-eq", company:"Equian / Conduent / Optum", plans:["HealthNet","Health Net","Cigna","UnitedHealthcare","Molina","Torrance IPA"], phone:"(888) 870-8842", fax:"(877) 200-0207", email:"submitreferrals@optum.com", portal:"subroreferrals.optum.com", notes:"⚠️ HMO / Capitated Optum plans do NOT seek subrogation. Conduent Fax: (847) 890-6203 | Equian Fax: (502) 214-1291", type:"Third-Party Admin" },
+  { id:"optum-eq", company:"Equian / Conduent / Optum", plans:["HealthNet","Health Net","Cigna","UnitedHealthcare","Molina","Torrance IPA"], phone:"(888) 870-8842", fax:"(877) 200-0207", email:"submitreferrals@optum.com", portal:"subroreferrals.optum.com", notes:"⚠️ HMO / Capitated Optum plans do NOT seek subrogation.", type:"Third-Party Admin" },
   { id:"optum-d", company:"Optum (Direct)", plans:["Blue Shield of CA","L.A. Care","LA Care","Covered California"], phone:"(888) 870-8842", fax:"(877) 200-0207", email:"submitreferrals@optum.com", type:"Third-Party Admin" },
   { id:"carelon", company:"Meridian / Carelon", plans:["Anthem Blue Cross","Anthem"], phone:"(800) 645-9785", email:"subrointake@carelon.com", fax:"(844) 634-2520", type:"Third-Party Admin" },
   { id:"phia", company:"The Phia Group", plans:["HMA","PHCS"], phone:"(888) 986-0080", fax:"(781) 848-1154", email:"accidentletter@phiagroup.com", type:"Third-Party Admin" },
@@ -51,7 +51,18 @@ const QUICK_PROMPTS = [
   { icon:"📋", label:"LA Checklist",     prompt:"Walk me through the Finalize LA checklist step by step. Settlement is $[amount], [pre-lit or lit] case." },
 ];
 
-const T = { bg:"#0c0e14", panel:"#131620", border:"#1c1f30", gold:"#c9a843", goldLight:"#e8c860", text:"#dde0ee", muted:"#5c5f72", dim:"#3a3d50", green:"#6fcc90" };
+const ACCEPTED_TYPES = {
+  "image/jpeg": "image", "image/jpg": "image", "image/png": "image",
+  "image/gif": "image", "image/webp": "image",
+  "application/pdf": "pdf",
+  "text/csv": "csv", "text/plain": "text",
+  "application/vnd.ms-excel": "csv",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+};
+
+const FILE_ICONS = { image:"🖼️", pdf:"📄", csv:"📊", text:"📝", xlsx:"📊" };
+
+const T = { bg:"#0c0e14", panel:"#131620", border:"#1c1f30", gold:"#c9a843", goldLight:"#e8c860", text:"#dde0ee", muted:"#5c5f72", dim:"#3a3d50", green:"#6fcc90", red:"#e07070" };
 
 const CSS = `
   @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&family=Playfair+Display:wght@500;600;700&display=swap');
@@ -73,7 +84,69 @@ const CSS = `
   @keyframes blink{0%,100%{opacity:1}50%{opacity:0.3}}
   @keyframes fadeUp{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
   .qbtn:hover{background:#1c1f30 !important;}
+  .dropzone-active{border-color:#c9a843 !important; background:#1a1810 !important;}
 `;
+
+// ── File processing helpers ──────────────────────────────────────────────────
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsText(file);
+  });
+}
+
+async function buildContentBlocks(text, attachments) {
+  const blocks = [];
+
+  for (const att of attachments) {
+    const kind = ACCEPTED_TYPES[att.file.type] || "text";
+
+    if (kind === "image") {
+      const b64 = await readFileAsBase64(att.file);
+      blocks.push({
+        type: "image",
+        source: { type: "base64", media_type: att.file.type, data: b64 },
+      });
+    } else if (kind === "pdf") {
+      const b64 = await readFileAsBase64(att.file);
+      blocks.push({
+        type: "document",
+        source: { type: "base64", media_type: "application/pdf", data: b64 },
+      });
+    } else {
+      // CSV, TXT, XLSX → read as text
+      try {
+        const textContent = await readFileAsText(att.file);
+        blocks.push({
+          type: "text",
+          text: `[File: ${att.file.name}]\n${textContent}`,
+        });
+      } catch {
+        blocks.push({ type: "text", text: `[File: ${att.file.name} — could not read]` });
+      }
+    }
+  }
+
+  if (text.trim()) {
+    blocks.push({ type: "text", text });
+  }
+
+  return blocks;
+}
+
+// ── Markdown renderer ────────────────────────────────────────────────────────
 
 function Markdown({ text }) {
   const html = useMemo(() => {
@@ -85,44 +158,46 @@ function Markdown({ text }) {
       .replace(/^#### (.+)$/gm,"<h4>$1</h4>").replace(/^### (.+)$/gm,"<h3>$1</h3>")
       .replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>").replace(/\*(.+?)\*/g,"<em>$1</em>")
       .replace(/^---+$/gm,"<hr>");
-    const rows=[];
-    t=t.replace(/^\|(.+)\|$/gm,row=>{
-      const cells=row.split("|").slice(1,-1).map(c=>c.trim());
-      if(cells.every(c=>/^[-:]+$/.test(c))) return "SKIP_ROW";
+    const rows = [];
+    t = t.replace(/^\|(.+)\|$/gm, row => {
+      const cells = row.split("|").slice(1,-1).map(c=>c.trim());
+      if (cells.every(c=>/^[-:]+$/.test(c))) return "SKIP_ROW";
       rows.push(cells); return "ROW_PLACEHOLDER";
     });
-    if(rows.length){
-      t=t.replace(/(ROW_PLACEHOLDER\n?)+/g,block=>{
-        const count=(block.match(/ROW_PLACEHOLDER/g)||[]).length;
-        const slice=rows.splice(0,count);
-        if(!slice.length) return "";
-        const [head,...body]=slice;
-        const th=head.map(c=>`<th>${c}</th>`).join("");
-        const trs=body.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}</tr>`).join("");
+    if (rows.length) {
+      t = t.replace(/(ROW_PLACEHOLDER\n?)+/g, block => {
+        const count = (block.match(/ROW_PLACEHOLDER/g)||[]).length;
+        const slice = rows.splice(0, count);
+        if (!slice.length) return "";
+        const [head,...body] = slice;
+        const th = head.map(c=>`<th>${c}</th>`).join("");
+        const trs = body.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}</tr>`).join("");
         return `<table><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>`;
       }).replace(/SKIP_ROW\n?/g,"");
     }
-    const lines=t.split("\n");
-    const out=[]; let list=null,ltype=null;
-    for(const ln of lines){
-      const ul=ln.match(/^[*-] (.+)$/),ol=ln.match(/^\d+\. (.+)$/);
-      if(ul||ol){
-        const tp=ul?"ul":"ol",ct=ul?ul[1]:ol[1];
-        if(list&&ltype!==tp){out.push(`</${ltype}>`);list=null;}
-        if(!list){out.push(`<${tp}>`);list=true;ltype=tp;}
+    const lines = t.split("\n");
+    const out = []; let list = null, ltype = null;
+    for (const ln of lines) {
+      const ul = ln.match(/^[*-] (.+)$/), ol = ln.match(/^\d+\. (.+)$/);
+      if (ul||ol) {
+        const tp = ul?"ul":"ol", ct = ul?ul[1]:ol[1];
+        if (list&&ltype!==tp) { out.push(`</${ltype}>`); list=null; }
+        if (!list) { out.push(`<${tp}>`); list=true; ltype=tp; }
         out.push(`<li>${ct}</li>`);
       } else {
-        if(list){out.push(`</${ltype}>`);list=null;ltype=null;}
-        const skip=ln.match(/^<(h[34]|table|thead|tbody|tr|pre|hr|ul|ol|li)/)||ln.trim()==="";
-        if(skip||ln.includes("&lt;")||ln.includes("&gt;")) out.push(ln);
-        else if(ln.trim()) out.push(`<p>${ln}</p>`);
+        if (list) { out.push(`</${ltype}>`); list=null; ltype=null; }
+        const skip = ln.match(/^<(h[34]|table|thead|tbody|tr|pre|hr|ul|ol|li)/)||ln.trim()==="";
+        if (skip||ln.includes("&lt;")||ln.includes("&gt;")) out.push(ln);
+        else if (ln.trim()) out.push(`<p>${ln}</p>`);
       }
     }
-    if(list) out.push(`</${ltype}>`);
+    if (list) out.push(`</${ltype}>`);
     return out.join("\n");
-  },[text]);
+  }, [text]);
   return <div className="mc" dangerouslySetInnerHTML={{__html:html}} />;
 }
+
+// ── Small UI components ──────────────────────────────────────────────────────
 
 function Inp({value,onChange,placeholder,mono}){
   const [f,setF]=useState(false);
@@ -137,6 +212,8 @@ function Sel({value,onChange,children}){
 }
 function Field({label,children}){return <div style={{marginBottom:12}}><div style={{fontSize:11,color:T.muted,fontWeight:600,marginBottom:5,letterSpacing:"0.3px"}}>{label}</div>{children}</div>;}
 function Head({title,sub}){return <div style={{marginBottom:22}}><h2 style={{fontFamily:"'Playfair Display',serif",fontSize:21,fontWeight:600,color:"#eae6d8",lineHeight:1.1}}>{title}</h2>{sub&&<p style={{fontSize:12,color:T.muted,marginTop:5}}>{sub}</p>}</div>;}
+
+// ── Main App ─────────────────────────────────────────────────────────────────
 
 export default function LiensApp() {
   const [tab,setTab]=useState("ai");
@@ -175,12 +252,17 @@ export default function LiensApp() {
   );
 }
 
+// ── AI Panel ─────────────────────────────────────────────────────────────────
+
 function AiPanel() {
-  const [msgs,setMsgs]=useState([{role:"assistant",content:"Hi! I'm your WCTL Liens AI — trained on the firm's full lien workflow, offer formulas, subro contacts, and all 12 document templates.\n\nTell me what you need or pick a quick-start on the left."}]);
+  const [msgs,setMsgs]=useState([{role:"assistant",content:"Hi! I'm your WCTL Liens AI.\n\nYou can type a question, use a quick-start on the left, or **attach files** — Filevine screenshots, PDFs, CSVs, lien documents, or any case files. I'll extract the data and help you from there."}]);
   const [input,setInput]=useState("");
+  const [attachments,setAttachments]=useState([]); // [{file, preview, kind}]
   const [loading,setLoading]=useState(false);
+  const [dragOver,setDragOver]=useState(false);
   const bottomRef=useRef(null);
   const taRef=useRef(null);
+  const fileInputRef=useRef(null);
 
   useEffect(()=>{ bottomRef.current?.scrollIntoView({behavior:"smooth"}); },[msgs,loading]);
 
@@ -189,29 +271,66 @@ function AiPanel() {
     ta.style.height="auto"; ta.style.height=Math.min(ta.scrollHeight,160)+"px";
   };
 
-  const send=async(override)=>{
-    const content=(override||input).trim(); if(!content||loading) return;
-    setInput(""); if(taRef.current) taRef.current.style.height="auto";
-    const updated=[...msgs,{role:"user",content}];
-    setMsgs(updated); setLoading(true);
+  const addFiles = (files) => {
+    const valid = Array.from(files).filter(f => ACCEPTED_TYPES[f.type] !== undefined || f.name.match(/\.(csv|txt|xlsx)$/i));
+    const newAtts = valid.map(file => {
+      const kind = ACCEPTED_TYPES[file.type] || "text";
+      const preview = kind === "image" ? URL.createObjectURL(file) : null;
+      return { file, preview, kind, id: Math.random().toString(36).slice(2) };
+    });
+    setAttachments(prev => [...prev, ...newAtts]);
+  };
+
+  const removeAttachment = (id) => setAttachments(prev => prev.filter(a => a.id !== id));
+
+  const handleDrop = (e) => {
+    e.preventDefault(); setDragOver(false);
+    addFiles(e.dataTransfer.files);
+  };
+
+  const send = async (override) => {
+    const text = (override || input).trim();
+    if ((!text && attachments.length === 0) || loading) return;
+    setInput(""); setAttachments([]);
+    if (taRef.current) taRef.current.style.height = "auto";
+
+    // Build display message
+    const displayContent = text || (attachments.length > 0 ? `[${attachments.map(a=>a.file.name).join(", ")}]` : "");
+    const attsCopy = [...attachments];
+
+    const updatedMsgs = [...msgs, { role:"user", content: displayContent, _attachments: attsCopy }];
+    setMsgs(updatedMsgs);
+    setLoading(true);
+
     try {
-      // Calls YOUR backend — API key never touches the browser
-      const res=await fetch("/api/chat",{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({ messages: updated.map(m=>({role:m.role,content:m.content})) })
+      // Build API messages — convert _attachments to content blocks
+      const apiMessages = await Promise.all(
+        updatedMsgs.map(async (m) => {
+          if (m.role === "assistant") return { role:"assistant", content: typeof m.content === "string" ? m.content : m.content };
+          const atts = m._attachments || [];
+          if (atts.length === 0) return { role:"user", content: m.content };
+          const blocks = await buildContentBlocks(m.content === displayContent ? text : m.content, atts);
+          return { role:"user", content: blocks };
+        })
+      );
+
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: apiMessages }),
       });
-      const data=await res.json();
-      const reply=data.content||data.error||"Sorry, something went wrong.";
-      setMsgs(p=>[...p,{role:"assistant",content:reply}]);
-    } catch(e){
-      setMsgs(p=>[...p,{role:"assistant",content:"⚠️ Connection error. Please try again."}]);
+      const data = await res.json();
+      const reply = data.content || data.error || "Sorry, something went wrong.";
+      setMsgs(p => [...p, { role:"assistant", content: reply }]);
+    } catch(e) {
+      setMsgs(p => [...p, { role:"assistant", content:"⚠️ Connection error. Please try again." }]);
     }
     setLoading(false);
   };
 
   return (
     <div style={{flex:1,display:"flex",height:"100%",overflow:"hidden"}}>
+      {/* Sidebar */}
       <div style={{width:165,borderRight:`1px solid ${T.border}`,background:"#0f1118",flexShrink:0,overflowY:"auto",padding:"12px 8px"}}>
         <div style={{fontSize:9.5,textTransform:"uppercase",letterSpacing:"1px",color:T.dim,fontWeight:700,padding:"0 6px",marginBottom:8}}>Quick Start</div>
         {QUICK_PROMPTS.map(q=>(
@@ -222,20 +341,60 @@ function AiPanel() {
           </button>
         ))}
         <div style={{marginTop:16,borderTop:`1px solid ${T.border}`,paddingTop:12}}>
-          <button className="qbtn" onClick={()=>setMsgs([{role:"assistant",content:"Hi! I'm your WCTL Liens AI — trained on the firm's full lien workflow, offer formulas, subro contacts, and all 12 document templates.\n\nTell me what you need or pick a quick-start on the left."}])}
+          <div style={{fontSize:9.5,textTransform:"uppercase",letterSpacing:"1px",color:T.dim,fontWeight:700,padding:"0 6px",marginBottom:8}}>Upload</div>
+          <button className="qbtn" onClick={()=>fileInputRef.current?.click()} disabled={loading}
+            style={{width:"100%",background:"none",border:"none",cursor:"pointer",padding:"7px 8px",borderRadius:6,marginBottom:3,textAlign:"left",display:"flex",alignItems:"center",gap:7}}>
+            <span style={{fontSize:13}}>📎</span>
+            <span style={{fontSize:11.5,color:"#9a9dc0"}}>Attach file</span>
+          </button>
+          <div style={{fontSize:10,color:T.dim,padding:"2px 8px",lineHeight:1.6}}>PNG, JPG, PDF, CSV, TXT</div>
+        </div>
+        <div style={{marginTop:16,borderTop:`1px solid ${T.border}`,paddingTop:12}}>
+          <button className="qbtn" onClick={()=>setMsgs([{role:"assistant",content:"Hi! I'm your WCTL Liens AI.\n\nYou can type a question, use a quick-start on the left, or **attach files** — Filevine screenshots, PDFs, CSVs, lien documents, or any case files. I'll extract the data and help you from there."}])}
             style={{width:"100%",background:"none",border:"none",cursor:"pointer",padding:"7px 8px",borderRadius:6,textAlign:"left",display:"flex",alignItems:"center",gap:7}}>
             <span style={{fontSize:13}}>🗑</span>
             <span style={{fontSize:11.5,color:"#9a9dc0"}}>Clear chat</span>
           </button>
         </div>
       </div>
-      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-        <div style={{flex:1,overflowY:"auto",padding:"16px"}}>
+
+      {/* Chat */}
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}
+        onDragOver={e=>{e.preventDefault();setDragOver(true);}}
+        onDragLeave={()=>setDragOver(false)}
+        onDrop={handleDrop}>
+
+        {/* Messages */}
+        <div style={{flex:1,overflowY:"auto",padding:"16px",position:"relative"}}>
+          {dragOver && (
+            <div style={{position:"absolute",inset:0,background:"#0c0e14cc",display:"flex",alignItems:"center",justifyContent:"center",zIndex:10,border:`2px dashed ${T.gold}`,borderRadius:8,margin:8}}>
+              <div style={{textAlign:"center",color:T.gold}}>
+                <div style={{fontSize:32,marginBottom:8}}>📎</div>
+                <div style={{fontSize:14,fontWeight:600}}>Drop files here</div>
+                <div style={{fontSize:11,color:T.muted,marginTop:4}}>Images, PDFs, CSVs, screenshots</div>
+              </div>
+            </div>
+          )}
           {msgs.map((m,i)=>(
             <div key={i} style={{display:"flex",gap:10,marginBottom:16,justifyContent:m.role==="user"?"flex-end":"flex-start",animation:"fadeUp 0.2s ease"}}>
               {m.role==="assistant"&&<div style={{width:28,height:28,borderRadius:"50%",flexShrink:0,background:`linear-gradient(135deg,${T.gold},${T.goldLight})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,marginTop:1}}>⚖</div>}
-              <div style={{maxWidth:"78%",borderRadius:m.role==="user"?"12px 12px 2px 12px":"2px 12px 12px 12px",padding:"10px 14px",fontSize:13,lineHeight:1.65,background:m.role==="user"?"#1a2040":T.panel,border:`1px solid ${m.role==="user"?"#2a3060":T.border}`,color:m.role==="user"?"#c8d0f0":T.text}}>
-                {m.role==="assistant"?<Markdown text={m.content}/>:<span style={{whiteSpace:"pre-wrap"}}>{m.content}</span>}
+              <div style={{maxWidth:"78%"}}>
+                {/* Attachment previews in message */}
+                {m._attachments?.length > 0 && (
+                  <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:6,justifyContent:"flex-end"}}>
+                    {m._attachments.map(a=>(
+                      <div key={a.id} style={{background:"#1a2040",border:"1px solid #2a3060",borderRadius:6,padding:"4px 8px",display:"flex",alignItems:"center",gap:5,fontSize:11}}>
+                        {a.preview
+                          ? <img src={a.preview} alt="" style={{width:40,height:40,objectFit:"cover",borderRadius:3}}/>
+                          : <span style={{fontSize:16}}>{FILE_ICONS[a.kind]||"📄"}</span>}
+                        <span style={{color:"#9a9dc0",maxWidth:100,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.file.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div style={{borderRadius:m.role==="user"?"12px 12px 2px 12px":"2px 12px 12px 12px",padding:"10px 14px",fontSize:13,lineHeight:1.65,background:m.role==="user"?"#1a2040":T.panel,border:`1px solid ${m.role==="user"?"#2a3060":T.border}`,color:m.role==="user"?"#c8d0f0":T.text}}>
+                  {m.role==="assistant"?<Markdown text={m.content}/>:<span style={{whiteSpace:"pre-wrap"}}>{m.content}</span>}
+                </div>
               </div>
             </div>
           ))}
@@ -249,30 +408,65 @@ function AiPanel() {
           )}
           <div ref={bottomRef}/>
         </div>
-        <div style={{padding:"12px 16px",borderTop:`1px solid ${T.border}`,background:"#0f1118"}}>
+
+        {/* Attachment previews above input */}
+        {attachments.length > 0 && (
+          <div style={{padding:"8px 16px 0",display:"flex",flexWrap:"wrap",gap:6,background:"#0f1118"}}>
+            {attachments.map(a=>(
+              <div key={a.id} style={{background:"#1a1f30",border:`1px solid ${T.border}`,borderRadius:6,padding:"4px 8px",display:"flex",alignItems:"center",gap:6,fontSize:11.5}}>
+                {a.preview
+                  ? <img src={a.preview} alt="" style={{width:28,height:28,objectFit:"cover",borderRadius:3}}/>
+                  : <span style={{fontSize:14}}>{FILE_ICONS[a.kind]||"📄"}</span>}
+                <span style={{color:"#9a9dc0",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.file.name}</span>
+                <button onClick={()=>removeAttachment(a.id)}
+                  style={{background:"none",border:"none",cursor:"pointer",color:T.muted,fontSize:13,lineHeight:1,padding:"0 2px"}}>×</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Input area */}
+        <div style={{padding:"10px 16px 12px",borderTop:`1px solid ${T.border}`,background:"#0f1118"}}>
           <div style={{display:"flex",gap:8,alignItems:"flex-end"}}>
+            {/* Attach button */}
+            <button onClick={()=>fileInputRef.current?.click()} title="Attach file"
+              style={{width:42,height:42,borderRadius:9,flexShrink:0,cursor:"pointer",border:`1px solid ${T.border}`,background:"#141720",color:T.muted,fontSize:17,display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.15s"}}
+              onMouseEnter={e=>{e.currentTarget.style.borderColor=T.gold;e.currentTarget.style.color=T.gold;}}
+              onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.color=T.muted;}}>
+              📎
+            </button>
+            <input ref={fileInputRef} type="file" multiple accept="image/*,.pdf,.csv,.txt,.xlsx"
+              style={{display:"none"}} onChange={e=>{addFiles(e.target.files);e.target.value="";}}/>
+
+            {/* Text input */}
             <div style={{flex:1,background:"#141720",border:`1px solid ${T.border}`,borderRadius:10,padding:"8px 12px",transition:"border-color 0.15s"}}
               onFocusCapture={e=>e.currentTarget.style.borderColor=T.gold}
               onBlurCapture={e=>e.currentTarget.style.borderColor=T.border}>
               <textarea ref={taRef} rows={1} value={input}
                 onChange={e=>{setInput(e.target.value);autosize();}}
                 onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}}}
-                placeholder="Ask anything — subro contacts, offer calcs, document drafts, workflow guidance..."
+                placeholder="Ask anything or drop a file — Filevine screenshots, PDFs, CSVs..."
                 style={{width:"100%",background:"none",border:"none",color:T.text,resize:"none",fontFamily:"'DM Sans',sans-serif",fontSize:13,lineHeight:1.5,maxHeight:160,overflow:"auto"}}/>
             </div>
-            <button onClick={()=>send()} disabled={loading||!input.trim()}
+
+            {/* Send button */}
+            <button onClick={()=>send()} disabled={loading||(!input.trim()&&attachments.length===0)}
               style={{width:42,height:42,borderRadius:9,flexShrink:0,cursor:"pointer",border:"none",
-                background:input.trim()&&!loading?`linear-gradient(135deg,${T.gold},${T.goldLight})`:"#1c1f30",
-                color:input.trim()&&!loading?"#0c0e14":T.dim,fontSize:17,display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.15s"}}>
+                background:(input.trim()||attachments.length>0)&&!loading?`linear-gradient(135deg,${T.gold},${T.goldLight})`:"#1c1f30",
+                color:(input.trim()||attachments.length>0)&&!loading?"#0c0e14":T.dim,fontSize:17,display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.15s"}}>
               {loading?<div style={{width:16,height:16,border:`2px solid ${T.gold}`,borderTopColor:"transparent",borderRadius:"50%",animation:"spin 0.7s linear infinite"}}/>:"↑"}
             </button>
           </div>
-          <div style={{marginTop:7,fontSize:10,color:T.dim,textAlign:"center"}}>Enter to send · Shift+Enter for new line</div>
+          <div style={{marginTop:7,fontSize:10,color:T.dim,textAlign:"center"}}>
+            Enter to send · Shift+Enter for new line · Drag & drop files anywhere
+          </div>
         </div>
       </div>
     </div>
   );
 }
+
+// ── Subro Lookup ──────────────────────────────────────────────────────────────
 
 function SubroPanel() {
   const [q,setQ]=useState("");
@@ -314,6 +508,8 @@ function SubroPanel() {
     </div>
   );
 }
+
+// ── Offer Calculator ──────────────────────────────────────────────────────────
 
 function OfferPanel() {
   const [type,setType]=useState("");const [inp,setInp]=useState({});const [result,setResult]=useState(null);
@@ -359,6 +555,8 @@ function OfferPanel() {
     </div>
   );
 }
+
+// ── Workflow Tracker ──────────────────────────────────────────────────────────
 
 function WorkflowPanel() {
   const [done,setDone]=useState(new Set());const [cn,setCn]=useState("");
